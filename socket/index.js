@@ -3,7 +3,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import http from 'http';
 import { Server } from 'socket.io';
-
+import UserRouter from "../routes/user.route.js"
 const app = express();
 
 // Middleware
@@ -21,8 +21,8 @@ app.use(express.urlencoded({
 app.use(cookieParser());
 
 
+app.use('/api/v1/users', UserRouter);
 
-// HTTP and WebSocket server
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {

@@ -6,6 +6,7 @@ dotenv.config();
 
 connectDB()
   .then(() => {
+    console.log('Connected to MongoDB');
     app.on('error', (error) => {
       console.log('The server connection error:', error);
       throw error;
