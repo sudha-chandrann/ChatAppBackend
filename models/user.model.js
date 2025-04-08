@@ -61,6 +61,18 @@ const UserSchema = new Schema({
     otpcode:{
       type:String,
       default:'',
+    },
+    passwordResetExpires:{
+      type:Date,
+      default: null
+    },
+    passwordResetToken:{
+      type:String,
+      default:'',
+    },
+    optexpires:{
+      type:Date,
+      default: null
     }
   }, {
     timestamps: true
