@@ -3,7 +3,8 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import http from 'http';
 import { Server } from 'socket.io';
-import UserRouter from "../routes/user.route.js"
+import UserRouter from "../routes/user.route.js";
+import ConversationRoutes from "../routes/chat.route.js"
 const app = express();
 
 // Middleware
@@ -22,6 +23,8 @@ app.use(cookieParser());
 
 
 app.use('/api/v1/users', UserRouter);
+app.use('/api/v1/conversations', ConversationRoutes);
+
 
 const server = http.createServer(app);
 const io = new Server(server, {

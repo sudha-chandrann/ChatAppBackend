@@ -24,7 +24,6 @@ export const verifyJWT=async (req,res,next)=>{
   next()
   }
   catch(error){
-    console.log(" the error during geting token is ",error);
     return res.status(401).json({
         message:error.message||error,
         success:false
