@@ -109,6 +109,17 @@ io.on('connection', async (socket) => {
       if (conversation) {
         conversation.participants.forEach(participant => {
           const participantId = participant.user._id.toString();
+          if (participantId !== userId && onlineUsers.has(participantId)) {
+            io.to(participantId).emit('messageNotification', {
+              conversationId,
+              noofunreadmessage: 1
+            });
+          }
+        });
+      }
+      if (conversation) {
+        conversation.participants.forEach(participant => {
+          const participantId = participant.user._id.toString();
           if ( onlineUsers.has(participantId)) {
             io.to(participantId).emit('sendmessageNotification', {
               conversationId,
@@ -116,17 +127,8 @@ io.on('connection', async (socket) => {
             });
           }
         });
-        conversation.participants.forEach(participant => {
-          const participantId = participant.user._id.toString();
-          if (participantId !== userId && onlineUsers.has(participantId)) {
-            io.to(participantId).emit('messageNotification', {
-              conversationId,
-              message: populatedMessage
-            });
-          }
-        });
       }
-
+    
     } catch (error) {
       console.error('Error sending message:', error);
       socket.emit('error', { message: 'Failed to send message' });
