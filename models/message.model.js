@@ -55,7 +55,8 @@ const MessageSchema = new Schema({
     readBy: [{
       user: {
         type: Schema.Types.ObjectId,
-        ref: 'User'
+        ref: 'User',
+        required:true
       },
       readAt: {
         type: Date,
@@ -106,7 +107,7 @@ const MessageSchema = new Schema({
     }],
     deliveryStatus: {
       type: String,
-      enum: ['sending', 'sent', 'delivered', 'failed'],
+      enum: ['sending', 'sent', 'delivered','read', 'failed'],
       default: 'sending'
     }
   }, {
