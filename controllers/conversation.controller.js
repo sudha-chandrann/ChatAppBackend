@@ -211,28 +211,34 @@ const getallconversationmessages = async (req, res) => {
     const skip = (page - 1) * limit;
     const messages = await Message.find({
       conversation: conversationId,
-      isDeleted: { $ne: true }
     })
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit)
     .populate('sender', 'username fullName profilePicture')
+    .populate({
+      path: 'replyTo',
+      populate: {
+        path: 'sender',
+        select: 'username fullName profilePicture'
+      }
+     })
     .lean();
 
-    const unreadMessages = messages.filter(
-      msg => !msg.readBy.includes(currentUserId.toString()) && 
-             msg.sender._id.toString() !== currentUserId.toString()
-    );
+    // const unreadMessages = messages.filter(
+    //   msg => !msg.readBy.includes(currentUserId.toString()) && 
+    //          msg.sender._id.toString() !== currentUserId.toString()
+    // );
 
-    if (unreadMessages.length > 0) {
-      const messageIds = unreadMessages.map(msg => msg._id);
+    // if (unreadMessages.length > 0) {
+    //   const messageIds = unreadMessages.map(msg => msg._id);
       
-      await Message.updateMany(
-        { _id: { $in: messageIds } },
-        { $addToSet: { readBy: currentUserId } }
-      );
+    //   await Message.updateMany(
+    //     { _id: { $in: messageIds } },
+    //     { $addToSet: { readBy: currentUserId } }
+    //   );
       
-    }
+    // }
     return res.status(200).json({
       message: "Messages fetched successfully",
       success: true,

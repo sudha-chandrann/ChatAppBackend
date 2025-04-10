@@ -61,12 +61,10 @@ io.on('connection', async (socket) => {
     }
   });
 
-   // Handle new message
    socket.on("sendMessage", async (messageData) => {
     try {
       const { conversationId, content, contentType, mediaUrl, mediaSize, mediaName, mediaType, replyTo } = messageData;
       
-      // Get user ID from socket map
       const userId = socketUserMap.get(socket.id);
       
       if (!userId) {
@@ -74,7 +72,6 @@ io.on('connection', async (socket) => {
         return;
       }
 
-      // Create new message
       const newMessage = new Message({
         conversation: conversationId,
         sender: userId,
@@ -88,27 +85,27 @@ io.on('connection', async (socket) => {
         deliveryStatus: 'sent'
       });
 
-      // Save message to database
       const savedMessage = await newMessage.save();
       
-      // Populate sender information
       const populatedMessage = await Message.findById(savedMessage._id)
         .populate('sender', 'username profilePicture _id')
-        .populate('replyTo');
+        .populate({
+          path: 'replyTo',
+          populate: {
+            path: 'sender',
+            select: 'username profilePicture _id'
+          }
+        });
 
-      // Update last message in conversation
       await Conversation.findByIdAndUpdate(conversationId, {
         lastMessage: savedMessage._id
       });
 
-      // Emit message to all users in the conversation
       io.to(`conversation:${conversationId}`).emit('newMessage', populatedMessage);
       
-      // Get conversation to find participants
       const conversation = await Conversation.findById(conversationId)
         .populate('participants.user', '_id');
       
-      // Send notification to all participants who are not the sender
       if (conversation) {
         conversation.participants.forEach(participant => {
           const participantId = participant.user._id.toString();
@@ -210,6 +207,176 @@ io.on('connection', async (socket) => {
       });
     } catch (error) {
       console.error('Error marking message as read:', error);
+    }
+  });
+
+  socket.on("addReaction", async ({ messageId, emoji }) => {
+    try {
+      const userId = socketUserMap.get(socket.id);
+      if (!userId) {
+        socket.emit('error', { message: 'Not authenticated' });
+        return;
+      }
+  
+      // Find the message
+      const message = await Message.findById(messageId);
+      if (!message) {
+        socket.emit('error', { message: 'Message not found' });
+        return;
+      }
+  
+      // Check if user already reacted with the same emoji
+      const existingReactionIndex = message.reactions.findIndex(
+        r => r.user.toString() === userId.toString() && r.emoji === emoji
+      );
+  
+      if (existingReactionIndex !== -1) {
+        message.reactions.splice(existingReactionIndex, 1);
+      } else {
+        message.reactions.push({
+          user: userId,
+          emoji,
+          createdAt: new Date()
+        });
+      }
+  
+      await message.save();
+      
+      // Get the updated message with populated fields
+      const populatedMessage = await Message.findById(messageId)
+        .populate('sender', 'username profilePicture _id')
+        .populate('reactions.user', 'username profilePicture _id');
+      
+      io.to(`conversation:${message.conversation}`).emit('messageReaction', {
+        messageId,
+        reactions: populatedMessage.reactions
+      });
+    } catch (error) {
+      console.error('Error adding reaction:', error);
+      socket.emit('error', { message: 'Failed to add reaction' });
+    }
+  });
+  
+  socket.on("deleteMessage", async ({ messageId, conversationId }) => {
+    try {
+      const userId = socketUserMap.get(socket.id);
+      if (!userId) {
+        socket.emit('error', { message: 'Not authenticated' });
+        return;
+      }
+  
+      const message = await Message.findById(messageId);
+      if (!message) {
+        socket.emit('error', { message: 'Message not found' });
+        return;
+      }
+  
+      // Check if the user is authorized to delete this message
+      if (message.sender.toString() !== userId.toString()) {
+        socket.emit('error', { message: 'Unauthorized to delete this message' });
+        return;
+      }
+  
+      // Soft delete the message
+      message.isDeleted = true;
+      message.deletedAt = new Date();
+      message.content = "This message was deleted";
+      message.contentType='text';
+      message.readBy = message.readBy.filter(entry => entry.user);
+      await message.save();
+      const updatedmessage = await Message.findById(messageId)
+      .populate('sender', 'username fullName profilePicture')
+  
+      // Emit to all users in the conversation
+      io.to(`conversation:${conversationId}`).emit('messageDeleted', {
+        messageId,
+        conversationId,
+        message: updatedmessage
+      });
+    } catch (error) {
+      console.error('Error deleting message:', error);
+      socket.emit('error', { message: 'Failed to delete message' });
+    }
+  });
+
+  socket.on("forwardMessage", async ({ messageId, targetConversationIds }) => {
+    try {
+      const userId = socketUserMap.get(socket.id);
+      if (!userId) {
+        socket.emit('error', { message: 'Not authenticated' });
+        return;
+      }
+  
+      const originalMessage = await Message.findById(messageId)
+        .populate('sender', 'username fullName profilePicture _id');
+      
+      if (!originalMessage) {
+        socket.emit('error', { message: 'Message not found' });
+        return;
+      }
+  
+      const forwardedMessages = [];
+  
+      // Forward to each target conversation
+      for (const conversationId of targetConversationIds) {
+        const conversation = await Conversation.findById(conversationId);
+        const isParticipant = conversation.participants.some(
+          p => p.user.toString() === userId.toString()
+        );
+  
+        if (!isParticipant) {
+          continue; // Skip this conversation
+        }
+  
+        // Create new forwarded message
+        const newMessage = new Message({
+          conversation: conversationId,
+          sender: userId,
+          content: originalMessage.content,
+          contentType: originalMessage.contentType,
+          mediaUrl: originalMessage.mediaUrl,
+          mediaSize: originalMessage.mediaSize,
+          mediaName: originalMessage.mediaName,
+          mediaType: originalMessage.mediaType,
+          isForwarded: true,
+          forwardedFrom: messageId,
+          deliveryStatus: 'sent'
+        });
+  
+        const savedMessage = await newMessage.save();
+        
+        // Update last message in conversation
+        await Conversation.findByIdAndUpdate(conversationId, {
+          lastMessage: savedMessage._id
+        });
+  
+        // Populate message data
+        const populatedMessage = await Message.findById(savedMessage._id)
+          .populate('sender', 'username profilePicture _id')
+          .populate('forwardedFrom');
+  
+        forwardedMessages.push(populatedMessage);
+        
+        // Emit to all users in the target conversation
+        io.to(`conversation:${conversationId}`).emit('newMessage', populatedMessage);
+        
+        // Send notification to all participants
+        conversation.participants.forEach(participant => {
+          const participantId = participant.user.toString();
+          if (participantId !== userId && onlineUsers.has(participantId)) {
+            io.to(participantId).emit('messageNotification', {
+              conversationId,
+              message: populatedMessage
+            });
+          }
+        });
+      }
+  
+      // Confirm successful forwarding to sender
+      socket.emit('messageForwarded', { success: true, count: forwardedMessages.length });
+    } catch (error) {
+      console.error('Error forwarding message:', error);
+      socket.emit('error', { message: 'Failed to forward message' });
     }
   });
 
