@@ -151,10 +151,7 @@ const getConversation = async (req, res) => {
       conversationObj.displayAvatar = conversation.avatar;
     }
 
-    // Check if conversation is muted for current user
-    const mutedInfo = conversation.muted.find(
-      (muteObj) => muteObj.user.toString() === currentUserId.toString()
-    );
+
 
     // Get the role of current user in this conversation
     const currentUserParticipant = conversation.participants.find(
@@ -225,20 +222,6 @@ const getallconversationmessages = async (req, res) => {
      })
     .lean();
 
-    // const unreadMessages = messages.filter(
-    //   msg => !msg.readBy.includes(currentUserId.toString()) && 
-    //          msg.sender._id.toString() !== currentUserId.toString()
-    // );
-
-    // if (unreadMessages.length > 0) {
-    //   const messageIds = unreadMessages.map(msg => msg._id);
-      
-    //   await Message.updateMany(
-    //     { _id: { $in: messageIds } },
-    //     { $addToSet: { readBy: currentUserId } }
-    //   );
-      
-    // }
     return res.status(200).json({
       message: "Messages fetched successfully",
       success: true,
@@ -262,4 +245,164 @@ const getallconversationmessages = async (req, res) => {
   }
 };
 
-export { createnewConversation, getConversation ,getallconversationmessages};
+const createnewGroupConversation=async(req,res)=>{
+  try{
+    const { userIds, groupName } = req.body;
+    const currentUserId = req.user._id; // Assuming you have authentication middleware
+
+    // Validation
+    if (!userIds || !Array.isArray(userIds) || userIds.length < 1) {
+      return res.status(400).json({
+        message: "At least one user is required to create a group",
+        success: false
+      });
+    }
+
+    if (!groupName || groupName.trim() === '') {
+      return res.status(400).json({
+        message: "Group name is required",
+        success: false
+      });
+    }
+
+    // Create participants array with current user as admin
+    const participants = [
+      {
+        user: currentUserId,
+        role: 'admin',
+        joinedAt: new Date()
+      }
+    ];
+
+    // Add other users as members
+    for (const userId of userIds) {
+      // Avoid adding duplicates or the current user again
+      if (userId.toString() !== currentUserId.toString()) {
+        participants.push({
+          user: userId,
+          role: 'member',
+          joinedAt: new Date()
+        });
+      }
+    }
+
+    // Create new conversation
+    const newConversation = await Conversation.create({
+      name: groupName,
+      isGroup: true,
+      participants: participants,
+      createdBy: currentUserId,
+    });
+
+    return res.status(201).json({
+      message: "Group conversation created successfully",
+      success: true,
+      conversation: newConversation._id
+    });
+  }
+  catch(error){
+    console.error("creating new group conversation error:", error);
+    return res.status(500).json({
+      message: error.message || "Failed to create new group conversation ",
+      success: false,
+    })
+  }
+}
+
+const getAllConversations = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    if (!userId) {
+      return res.status(401).json({
+        message: "Unauthorized",
+        success: false,
+        status: 401
+      });
+    }
+
+    const conversations = await Conversation.find({
+      'participants.user': userId
+    })
+      .populate({
+        path: "participants.user",
+        select: "username fullName profilePicture status lastSeen bio",
+      })
+      .populate({
+        path: "lastMessage",
+        select: "content contentType deliveryStatus createdAt sender",
+        populate: {
+          path: "sender",
+          select: "username profilePicture",
+        },
+      });
+
+    if (!conversations || conversations.length === 0) {
+      return res.status(200).json({
+        message: "No conversations found",
+        success: true,
+        conversations: []
+      });
+    }
+
+    // Process each conversation for display
+    const processedConversations = await Promise.all(conversations.map(async conversation => {
+      const conversationObj = conversation.toObject();
+      const currentUserId = userId.toString();
+
+      // For non-group chats, set display info to the other participant's
+      if (!conversationObj.isGroup) {
+        const otherParticipant = conversationObj.participants.find(
+          (p) => p.user._id.toString() !== currentUserId
+        );
+
+        if (otherParticipant && otherParticipant.user) {
+          conversationObj.displayName =
+            otherParticipant.user.fullName || otherParticipant.user.username;
+          conversationObj.displayAvatar = otherParticipant.user.profilePicture;
+          conversationObj.otherUser = otherParticipant.user;
+        }
+      } else {
+        // For groups, use the group name and avatar
+        conversationObj.displayName = conversationObj.name;
+        conversationObj.displayAvatar = conversationObj.avatar;
+      }
+
+      // Get the role of current user in this conversation
+      const currentUserParticipant = conversationObj.participants.find(
+        (p) => p.user._id.toString() === currentUserId
+      );
+
+      conversationObj.userRole = currentUserParticipant
+        ? currentUserParticipant.role
+        : "member";
+      
+      // Count unread messages for the current user
+      const unreadCount = await Message.countDocuments({
+        conversation: conversation._id,
+        'readBy.user': { $ne: userId },
+        sender: { $ne: userId },
+        isDeleted: false
+      });
+
+      conversationObj.unreadCount = unreadCount;
+
+      return conversationObj;
+    }));
+
+    return res.status(200).json({
+      message: "Conversations fetched successfully",
+      success: true,
+      conversations: processedConversations
+    });
+  }
+  catch (err) {
+    console.error("Error fetching all conversations:", err);
+    return res.status(500).json({
+      message: err.message || "Failed to fetch all conversations",
+      success: false,
+      status: 500
+    });
+  }
+};
+
+export { createnewConversation, getConversation ,getallconversationmessages,createnewGroupConversation,getAllConversations};

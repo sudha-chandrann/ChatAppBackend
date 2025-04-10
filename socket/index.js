@@ -104,9 +104,18 @@ io.on('connection', async (socket) => {
       io.to(`conversation:${conversationId}`).emit('newMessage', populatedMessage);
       
       const conversation = await Conversation.findById(conversationId)
-        .populate('participants.user', '_id');
+      .populate('participants.user', '_id');
       
       if (conversation) {
+        conversation.participants.forEach(participant => {
+          const participantId = participant.user._id.toString();
+          if ( onlineUsers.has(participantId)) {
+            io.to(participantId).emit('sendmessageNotification', {
+              conversationId,
+              message: populatedMessage
+            });
+          }
+        });
         conversation.participants.forEach(participant => {
           const participantId = participant.user._id.toString();
           if (participantId !== userId && onlineUsers.has(participantId)) {
@@ -117,6 +126,7 @@ io.on('connection', async (socket) => {
           }
         });
       }
+
     } catch (error) {
       console.error('Error sending message:', error);
       socket.emit('error', { message: 'Failed to send message' });
@@ -205,6 +215,18 @@ io.on('connection', async (socket) => {
         userId, 
         status: message.deliveryStatus 
       });
+      if (conversation) {
+        conversation.participants.forEach(participant => {
+          const participantId = participant.user._id.toString();
+          if (participantId === userId && onlineUsers.has(participantId)) {
+            io.to(participantId).emit('markNotificationread', {
+              conversationId,
+            });
+          }
+        });
+      }
+
+
     } catch (error) {
       console.error('Error marking message as read:', error);
     }
