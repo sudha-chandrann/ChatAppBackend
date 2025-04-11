@@ -161,6 +161,12 @@ const getConversation = async (req, res) => {
     conversationObj.userRole = currentUserParticipant
       ? currentUserParticipant.role
       : "member";
+    
+    const isAlreadyMuted = conversation.muted.some(
+        mutedUserId => mutedUserId.toString() === currentUserId.toString()
+    ); 
+    conversationObj.isusermuted = isAlreadyMuted
+
 
     return res.status(201).json({
       message: "Conversation is fetched successfully",
@@ -206,7 +212,6 @@ const getallconversationmessages = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const skip = (page - 1) * limit;
-    const pinnedMessageIds = conversation.pinnedmessage?.map(id => id.toString()) || [];
 
     const messages = await Message.find({
       conversation: conversationId,
@@ -223,16 +228,13 @@ const getallconversationmessages = async (req, res) => {
       }
      })
     .lean();
-    const enrichedMessages = messages.map(msg => ({
-      ...msg,
-      isPinned: pinnedMessageIds.includes(msg._id.toString())
-    }));
+
 
     return res.status(200).json({
       message: "Messages fetched successfully",
       success: true,
       status: 200,
-      messages: enrichedMessages.reverse(),
+      messages: messages.reverse(),
       pagination: {
         page,
         limit,

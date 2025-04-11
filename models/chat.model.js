@@ -43,16 +43,11 @@ const ConversationSchema = new Schema({
       default: '',
       maxlength: [500, "Description cannot exceed 500 characters"]
     },
-    muted: [{
-      user: {
+    muted: [
+       {
         type: Schema.Types.ObjectId,
         ref: 'User'
-      },
-      until: {
-        type: Date,
-        default: null
-      }
-    }],
+      }],
     pinned: [{
       type: Schema.Types.ObjectId,
       ref: 'User'

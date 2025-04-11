@@ -109,6 +109,10 @@ const MessageSchema = new Schema({
       type: String,
       enum: ['sending', 'sent', 'delivered','read', 'failed'],
       default: 'sending'
+    },
+    isPinned:{
+      type:Boolean,
+      default:false
     }
   }, {
     timestamps: true
