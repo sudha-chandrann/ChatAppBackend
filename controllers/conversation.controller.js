@@ -206,6 +206,8 @@ const getallconversationmessages = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const skip = (page - 1) * limit;
+    const pinnedMessageIds = conversation.pinnedmessage?.map(id => id.toString()) || [];
+
     const messages = await Message.find({
       conversation: conversationId,
     })
@@ -221,12 +223,16 @@ const getallconversationmessages = async (req, res) => {
       }
      })
     .lean();
+    const enrichedMessages = messages.map(msg => ({
+      ...msg,
+      isPinned: pinnedMessageIds.includes(msg._id.toString())
+    }));
 
     return res.status(200).json({
       message: "Messages fetched successfully",
       success: true,
       status: 200,
-      messages: messages.reverse(),
+      messages: enrichedMessages.reverse(),
       pagination: {
         page,
         limit,

@@ -12,7 +12,7 @@ const app = express();
 
 // Middleware
 app.use(cors({
-  origin: process.env.CORS_ORIGIN,
+  origin: ['http://localhost:5174'],
   credentials: true
 }));
 app.use(express.json({
@@ -101,11 +101,13 @@ io.on('connection', async (socket) => {
         lastMessage: savedMessage._id
       });
 
-      io.to(`conversation:${conversationId}`).emit('newMessage', populatedMessage);
-      
+      io.to(`conversation:${conversationId}`).emit('newMessage', {
+        conversationId: conversationId,  
+        message: populatedMessage
+      });
+
       const conversation = await Conversation.findById(conversationId)
       .populate('participants.user', '_id');
-      
       if (conversation) {
         conversation.participants.forEach(participant => {
           const participantId = participant.user._id.toString();
@@ -117,10 +119,12 @@ io.on('connection', async (socket) => {
           }
         });
       }
+
       if (conversation) {
         conversation.participants.forEach(participant => {
           const participantId = participant.user._id.toString();
           if ( onlineUsers.has(participantId)) {
+
             io.to(participantId).emit('sendmessageNotification', {
               conversationId,
               message: populatedMessage
@@ -141,6 +145,7 @@ io.on('connection', async (socket) => {
     if (userId && conversationId) {
       socket.to(`conversation:${conversationId}`).emit('userTyping', { userId, isTyping });
     }
+
   });
 
   socket.on("markAsRead", async ({ messageId, conversationId }) => {
@@ -236,12 +241,14 @@ io.on('connection', async (socket) => {
 
   socket.on("addReaction", async ({ messageId, emoji }) => {
     try {
+      console.log(" the reaction is ",emoji)
+
       const userId = socketUserMap.get(socket.id);
       if (!userId) {
         socket.emit('error', { message: 'Not authenticated' });
         return;
       }
-  
+      console.log(" the reaction is ",emoji)
       // Find the message
       const message = await Message.findById(messageId);
       if (!message) {
@@ -403,6 +410,140 @@ io.on('connection', async (socket) => {
       socket.emit('error', { message: 'Failed to forward message' });
     }
   });
+  socket.on("editMessage", async ({ messageId, conversationId, newContent }) => {
+    try {
+      const userId = socketUserMap.get(socket.id);
+      if (!userId) {
+        socket.emit('error', { message: 'Not authenticated' });
+        return;
+      }
+      const message = await Message.findById(messageId);
+      if (!message) {
+        socket.emit('error', { message: 'Message not found' });
+        return;
+      }
+      if (message.sender.toString() !== userId.toString()) {
+        socket.emit('error', { message: 'Unauthorized to edit this message' });
+        return;
+      }
+        if (message.contentType !== 'text') {
+        socket.emit('error', { message: 'Only text messages can be edited' });
+        return;
+      }
+  
+      // Check if the message is already deleted
+      if (message.isDeleted) {
+        socket.emit('error', { message: 'Cannot edit a deleted message' });
+        return;
+      }
+  
+      message.editHistory.push({
+        content: message.content,
+        editedAt: new Date()
+      });
+  
+      message.content = newContent;
+      message.isEdited = true;
+      
+      await message.save();
+      
+      const updatedMessage = await Message.findById(messageId)
+        .populate('sender', 'username fullName profilePicture _id')
+        .populate({
+          path: 'replyTo',
+          populate: {
+            path: 'sender',
+            select: 'username profilePicture _id'
+          }
+        });
+      
+      // Emit to all users in the conversation
+      io.to(`conversation:${conversationId}`).emit('messageEdited', {
+        messageId,
+        ConversationId:conversationId,
+        message: updatedMessage
+      });
+      
+      // Emit to sender to confirm edit
+      socket.emit('editSuccess', { messageId });
+      
+    } catch (error) {
+      console.error('Error editing message:', error);
+      socket.emit('error', { message: 'Failed to edit message' });
+    }
+  });
+  socket.on("pinnedMessage", async ({ messageId, conversationId }) => {
+    try {
+      const userId = socketUserMap.get(socket.id);
+      if (!userId) {
+        socket.emit('error', { message: 'Not authenticated' });
+        return;
+      }
+      const message = await Message.findById(messageId);
+      if (!message) {
+        socket.emit('error', { message: 'Message not found' });
+        return;
+      }
+  
+      if (message.isDeleted) {
+        socket.emit('error', { message: 'Cannot pin a deleted message' });
+        return;
+      }
+  
+      const conversation = await Conversation.findById(conversationId);
+      if (!conversation) {
+        socket.emit('error', { message: 'Conversation not found' });
+        return;
+      }
+      const isParticipant = conversation.participants.some(
+        participant => participant.user.toString() === userId.toString()
+      );
+      
+      if (!isParticipant) {
+        socket.emit('error', { message: 'You are not a participant in this conversation' });
+        return;
+      }
+  
+      const isPinned = conversation.pinnedmessage.some(
+        pinnedId => pinnedId.toString() === messageId.toString()
+      );
+      if (isPinned) {
+          conversation.pinnedmessage = conversation.pinnedmessage.filter(
+          pinnedId => pinnedId.toString() !== messageId.toString()
+      );
+        await conversation.save();
+  
+        io.to(`conversation:${conversationId}`).emit('messageUnpinned', {
+          messageId,
+          conversationId
+        });
+  
+        // Confirm to sender
+        socket.emit('unpinSuccess', { messageId });
+      } else {
+        // Pin the message
+        conversation.pinnedmessage.push(messageId);
+        await conversation.save();
+  
+        // Get updated message with populated fields
+        const updatedMessage = await Message.findById(messageId)
+          .populate('sender', 'username fullName profilePicture _id');
+  
+        // Emit to all users in the conversation
+        io.to(`conversation:${conversationId}`).emit('messagePinned', {
+          messageId,
+          conversationId,
+          message: updatedMessage
+        });
+  
+        // Confirm to sender
+        socket.emit('pinSuccess', { messageId });
+      }
+    } catch (error) {
+      console.error('Error handling pinned message:', error);
+      socket.emit('error', { message: 'Failed to pin/unpin message' });
+    }
+  });
 
   socket.on('disconnect', async () => {
     console.log('Client disconnected', socket.id);
@@ -425,6 +566,8 @@ io.on('connection', async (socket) => {
       io.emit('userStatus', { userId, status: 'offline' });
     }
   });
+  
+
 });
 
 
