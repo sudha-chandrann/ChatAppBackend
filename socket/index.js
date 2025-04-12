@@ -8,13 +8,17 @@ import ConversationRoutes from "../routes/chat.route.js";
 import { User } from "../models/user.model.js";
 import { Message } from "../models/message.model.js";
 import { Conversation } from "../models/chat.model.js";
+import dotenv from "dotenv";
+dotenv.config();
 const app = express();
 
 // Middleware
 app.use(
   cors({
-    origin: ["http://localhost:5174"],
+    origin: ["http://localhost:5173",process.env.FRONTEND_URL],
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH','DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization']
   })
 );
 app.use(
@@ -36,7 +40,7 @@ app.use("/api/v1/conversations", ConversationRoutes);
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: ["http://localhost:5173",process.env.FRONTEND_URL],
     credentials: true,
   },
 });

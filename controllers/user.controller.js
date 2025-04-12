@@ -1,5 +1,6 @@
 import { User } from "../models/user.model.js";
-import { sendRecoveryEmail } from "../utils/nodemailer.js";
+import { sendVerifyEmail } from "../utils/nodemailer.js";
+import { sendRecoveryEmail } from "../utils/recoverpasswordremail.js";
 
 const registerUser = async (req, res) => {
   try {
@@ -111,9 +112,10 @@ const loginUser = async (req, res) => {
     // Set cookie options
     const cookieOptions = {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      secure: true,
+      sameSite: "none",
       maxAge: 24 * 60 * 60 * 1000, // 1 day
+      path:"/"
     };
 
     user.lastSeen = new Date();
@@ -123,6 +125,7 @@ const loginUser = async (req, res) => {
       message: "Login successful",
       success: true,
       status: 200,
+      token: refreshToken 
     });
   } catch (error) {
     console.error("Login error:", error);
@@ -173,7 +176,7 @@ const sendVerificationCode = async (req, res) => {
     await user.save();
 
     // Send verification email
-    await sendRecoveryEmail(email, code);
+    await sendVerifyEmail(email, code);
 
     return res.status(200).json({
       message: "Verification code sent successfully",
@@ -268,14 +271,14 @@ const logout = async (req, res) => {
         await user.save();
       }
     }
-
-    const options = {
+    const cookieOptions = {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      secure: true,
+      sameSite: "none",
+      path:"/"
     };
 
-    return res.clearCookie("token", options).status(200).json({
+    return res.clearCookie("token", cookieOptions).status(200).json({
       message: "Logged out successfully",
       success: true,
       status: 200,
@@ -517,6 +520,99 @@ const getUsers = async (req, res) => {
   }
 };
 
+const requestRecoveryCode=async(req,res)=>{
+  try {
+    const { email } = req.body;
+    if(!email){
+      return res.status(400).json({
+        message: "Email is required",
+        success: false,
+        status:400
+        });
+    }
+    const user= await User.findOne({email});
+    if(!user){
+      return res.status(404).json({
+        message: "User not found",
+        success: false,
+        status:404
+        });
+    }
+    const code = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit code
+    const expiry = new Date(Date.now() + 10 * 60 * 1000); 
+    user.passwordResetToken = code;
+    user.passwordResetExpires = expiry;
+    await user.save();
+    await sendRecoveryEmail(email,code);
+    return res.status(200).json({
+      message: "Recovery code sent successfully to your email",
+      success: true,
+    })
+
+  }
+  catch(error){
+    console.error("Request recovery code error:", error);
+    return res.status(500).json({
+      message: error.message || "Failed to request recovery code",
+      success: false,
+      status: 500,
+      });
+  }
+}
+
+const resetnewpassword=async(req,res)=>{
+  try{
+    const { email, verificationCode, newPassword } = req.body;
+    if(!email || !verificationCode || !newPassword){
+      return res.status(400).json({
+        message: "Email, verification code and new password are required",
+        success: false,
+        status:400
+      })
+    }
+    const user = await User.findOne({ email });  
+    if(!user){
+      return res.status(404).json({
+        message: "User not found",
+        success: false,
+        status:404
+        });
+    }
+    if(user.passwordResetToken !==verificationCode){
+      return res.status(400).json({
+        message: "Invalid verification code",
+        success: false,
+        status:400
+        })
+    }
+    if(user.passwordResetExpires < Date.now()){
+      return res.status(400).json({
+        message: "Recovery code has expired",
+        success: false,
+        status:400
+        })
+    }
+    user.password=newPassword;
+    user.passwordResetToken=null;
+    user.passwordResetExpires=null;
+    await user.save();
+    return res.status(200).json({
+      message: "Password reset successfully",
+      success: true,
+      status:200
+    })
+
+  }
+  catch(err){
+    console.error("Reset new password error:", err);
+    return res.status(500).json({
+      message: err.message || "Failed to reset new password",
+      success: false,
+      status: 500,
+      });
+  }
+}
+
 
 
 export {
@@ -528,5 +624,7 @@ export {
   getcurrentUser,
   changepassword,
   upadteuser,
-  getUsers
+  getUsers,
+  requestRecoveryCode,
+  resetnewpassword
 };
