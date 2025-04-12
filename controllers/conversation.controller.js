@@ -638,7 +638,85 @@ const getUsers = async (req, res) => {
   }
 };
 
+const getConversationMediaInformation=async(req,res)=>{
+  try {
+    const { conversationId } = req.params;
+    const currentUserId = req.user._id;
+    if (
+      !mongoose.Types.ObjectId.isValid(conversationId) ||
+      !mongoose.Types.ObjectId.isValid(currentUserId)
+    ) {
+      return res.status(400).json({
+        message: "Invalid user ID and ConversationId format",
+        success: false,
+        status: 400,
+      });
+    }
+
+    const conversation = await Conversation.findOne({
+      _id: conversationId,
+      "participants.user": currentUserId, // Ensure user is a participant
+    })
+
+
+    if (!conversation) {
+      return res.status(404).json({
+        message: "Conversation not found",
+        success: false,
+        status: 404,
+      });
+    }
+
+    const imagemedia = await Message.find({
+      conversation: conversationId,
+      contentType: { $in: ['image'] },
+      mediaUrl: { $ne: '' }
+    })
+    .populate("sender","username fullName profilePicture")
+    .sort({ createdAt: -1 })
+
+    const videomedia = await Message.find({
+      conversation: conversationId,
+      contentType: { $in: ['video'] },
+      mediaUrl: { $ne: '' }
+    })
+    .populate("sender","username fullName profilePicture")
+    .sort({ createdAt: -1 })
+
+    const filemedia = await Message.find({
+      conversation: conversationId,
+      contentType: { $in: ['file'] },
+      mediaUrl: { $ne: '' }
+    })
+    .populate("sender","username fullName profilePicture")
+    .sort({ createdAt: -1 })
+
+
+   
+    return res.status(201).json({
+      message: "Conversation is fetched successfully",
+      success: true,
+      status: 201,
+      data:{
+        image: imagemedia,
+        video: videomedia,
+        file: filemedia
+      }
+    });
+    
+
+  }
+  catch(err){
+    console.error("Get conversation media information error:", err);
+    return res.status(500).json({
+      message: err.message || "Failed to retrieve conversation media information",
+      success: false,
+      status: 500,
+    })
+  }
+}
 
 
 
-export { createnewConversation, getConversation ,getallconversationmessages,createnewGroupConversation,getAllConversations,getConversationInformation,getUsers};
+
+export { createnewConversation, getConversationMediaInformation,getConversation ,getallconversationmessages,createnewGroupConversation,getAllConversations,getConversationInformation,getUsers};
