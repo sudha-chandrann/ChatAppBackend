@@ -413,4 +413,232 @@ const getAllConversations = async (req, res) => {
   }
 };
 
-export { createnewConversation, getConversation ,getallconversationmessages,createnewGroupConversation,getAllConversations};
+const getConversationInformation = async (req, res) => {
+  try {
+    const { ConversationId } = req.params;
+    const currentUserId = req.user._id;
+    if (
+      !mongoose.Types.ObjectId.isValid(ConversationId) ||
+      !mongoose.Types.ObjectId.isValid(currentUserId)
+    ) {
+      return res.status(400).json({
+        message: "Invalid user ID and ConversationId format",
+        success: false,
+        status: 400,
+      });
+    }
+
+    const conversation = await Conversation.findOne({
+      _id: ConversationId,
+      "participants.user": currentUserId, // Ensure user is a participant
+    })
+      .populate({
+        path: "participants.user",
+        select: "username fullName profilePicture status lastSeen bio",
+      })
+      .populate({
+        path: "createdBy",
+        select: "username fullName profilePicture",
+      })
+      .populate({
+        path: "lastMessage",
+        select:
+          "content contentType mediaUrl createdAt sender readBy isDeleted",
+        populate: {
+          path: "sender",
+          select: "username profilePicture",
+        },
+      })
+      .populate({
+        path: "pinnedmessage",
+        select: "content contentType mediaUrl createdAt sender readBy",
+        populate: {
+          path: "sender",
+          select: "username profilePicture bio",
+        },
+      });
+
+    if (!conversation) {
+      return res.status(404).json({
+        message: "Conversation not found",
+        success: false,
+        status: 404,
+      });
+    }
+    // Process conversation for display
+    const conversationObj = conversation.toObject();
+
+    // For non-group chats, set display info to the other participant's
+    if (!conversation.isGroup) {
+      const otherParticipant = conversation.participants.find(
+        (p) => p.user._id.toString() !== currentUserId.toString()
+      );
+
+      if (otherParticipant) {
+        conversationObj.displayName =
+          otherParticipant.user.username || otherParticipant.user.fullName;
+        conversationObj.displayAvatar = otherParticipant.user.profilePicture;
+        conversationObj.displaydescription = otherParticipant.user.bio;
+        conversationObj.otherUser = otherParticipant.user;
+      }
+    } else {
+      // For groups, use the group name and avatar
+      conversationObj.displayName = conversation.name;
+      conversationObj.displayAvatar = conversation.avatar;
+      conversationObj.displaydescription=conversation.description
+    }
+
+
+
+    // Get the role of current user in this conversation
+    const currentUserParticipant = conversation.participants.find(
+      (p) => p.user._id.toString() === currentUserId.toString()
+    );
+
+    conversationObj.userRole = currentUserParticipant
+      ? currentUserParticipant.role
+      : "member";
+    
+    const isAlreadyMuted = conversation.muted.some(
+        mutedUserId => mutedUserId.toString() === currentUserId.toString()
+    ); 
+    conversationObj.isusermuted = isAlreadyMuted
+    const mediaCount = await Message.countDocuments({
+      conversation: ConversationId,
+      contentType: { $in: ['image', 'video', 'file'] },
+      mediaUrl: { $ne: '' }
+    });
+    const media = await Message.find({
+      conversation: ConversationId,
+      contentType: { $in: ['image', 'video'] },
+      mediaUrl: { $ne: '' }
+    })
+    .sort({ createdAt: -1 })
+    .limit(3)
+
+   
+    return res.status(201).json({
+      message: "Conversation is fetched successfully",
+      success: true,
+      status: 201,
+      data:{
+        conversation: conversationObj,
+        media:media,
+        mediaCount:mediaCount
+      }
+    });
+  } catch (error) {
+    console.error("geting conversation error:", error);
+    return res.status(500).json({
+      message: error.message || "Failed to get  conversation ",
+      success: false,
+      status: 500,
+    });
+  }
+};
+
+const getUsers = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { conversationId } = req.params;
+    const { term } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({
+        message: "Unauthorized",
+        success: false,
+        status: 401,
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(conversationId)) {
+      return res.status(400).json({
+        message: "Invalid conversation ID",
+        success: false,
+        status: 400,
+      });
+    }
+
+    const currentUser = await User.findById(userId).select('blockedUsers');
+    if (!currentUser) {
+      return res.status(404).json({
+        message: "User not found",
+        success: false,
+        status: 404,
+      });
+    }
+
+    const conversation = await Conversation.findById(conversationId).select('participants');
+    if (!conversation) {
+      return res.status(404).json({
+        message: "Conversation not found",
+        success: false,
+        status: 404,
+      });
+    }
+
+    const memberIds = conversation.participants.map(p => p.user.toString());
+    const memberObjectIds = memberIds.map(id => new mongoose.Types.ObjectId(id));
+
+    const blockedObjectIds = currentUser.blockedUsers.map(id => new mongoose.Types.ObjectId(id));
+
+    const commonFilters = {
+      $and: [
+        { _id: { $ne: new mongoose.Types.ObjectId(userId) } },
+        { _id: { $nin: blockedObjectIds } },
+        { blockedUsers: { $ne: new mongoose.Types.ObjectId(userId) } },
+        { _id: { $nin: memberObjectIds } }
+      ]
+    };
+
+    let users;
+
+    if (term?.trim()) {
+      users = await User.find({
+        ...commonFilters,
+        $or: [
+          { username: { $regex: term, $options: 'i' } },
+          { email: { $regex: term, $options: 'i' } },
+          { fullName: { $regex: term, $options: 'i' } }
+        ]
+      })
+        .select('username email fullName profilePicture status lastSeen')
+        .limit(10);
+    } else {
+      users = await User.aggregate([
+        { $match: commonFilters },
+        { $sample: { size: 5 } },
+        {
+          $project: {
+            username: 1,
+            email: 1,
+            fullName: 1,
+            profilePicture: 1,
+            status: 1,
+            lastSeen: 1
+          }
+        }
+      ]);
+    }
+
+    return res.status(200).json({
+      message: "Users retrieved successfully",
+      success: true,
+      status: 200,
+      data: users
+    });
+
+  } catch (error) {
+    console.error("Get users error:", error);
+    return res.status(500).json({
+      message: error.message || "Failed to retrieve users",
+      success: false,
+      status: 500,
+    });
+  }
+};
+
+
+
+
+export { createnewConversation, getConversation ,getallconversationmessages,createnewGroupConversation,getAllConversations,getConversationInformation,getUsers};

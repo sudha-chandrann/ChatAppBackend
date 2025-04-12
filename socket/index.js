@@ -345,6 +345,10 @@ io.on("connection", async (socket) => {
       message.deletedAt = new Date();
       message.content = "This message was deleted";
       message.contentType = "text";
+      message.mediaUrl='';
+      message.mediaName='';
+      message.mediaSize=0;
+      message.mediaType='';
       message.readBy = message.readBy.filter((entry) => entry.user);
       await message.save();
       const updatedmessage = await Message.findById(messageId).populate(
@@ -655,6 +659,317 @@ io.on("connection", async (socket) => {
       });
     }
   });
+  socket.on("addnewmember", async ({ conversationId, newuserIds }) => {
+    try {
+
+      const userId = socketUserMap.get(socket.id);
+      if (!userId) {
+        socket.emit("error", { message: "Not authenticated" });
+        return;
+      }
+      const conversation = await Conversation.findById(conversationId);
+      if (!conversation) {
+        socket.emit("error", { message: "Conversation not found" });
+        return;
+      }
+  
+      const currentParticipant = conversation.participants.find(
+        (p) => p.user.toString() === userId && p.role === "admin"
+      );
+  
+      if (!currentParticipant) {
+        socket.emit("error", {
+          message: "Only admins can add new members to the conversation",
+        });
+        return;
+      }
+  
+      const existingUserIds = conversation.participants.map(p => p.user.toString());
+      const newUsersToAdd = newuserIds.filter(id => !existingUserIds.includes(id));
+      if (newUsersToAdd.length === 0) {
+        socket.emit("info", {
+          message: "All selected users are already participants",
+        });
+        return;
+      }
+  
+      newUsersToAdd.forEach(id => {
+        conversation.participants.push({
+          user: id,
+          role: 'member',
+          joinedAt: new Date(),
+        });
+      });
+  
+      await conversation.save();
+  
+      const updatedConversation = await Conversation.findById(conversationId)
+        .populate("participants.user", "username profilePicture fullName bio lastSeen status");
+  
+      // Emit event to all participants using the updated conversation
+      updatedConversation.participants.forEach(participant => {
+        const participantId = participant.user._id.toString();
+        if (participantId) {
+          io.to(participantId).emit("newmemberaddedtoconversation",{conversationId,participants:updatedConversation.participants});
+        }
+      });
+  
+
+    } catch (error) {
+      console.error("Error handling add new member:", error);
+      socket.emit("error", {
+        message: "Failed to add new member",
+      });
+    }
+  });
+  socket.on("removeMember",async({conversationId,memberId})=>{
+    try {
+      const userId = socketUserMap.get(socket.id);
+      if (!userId) {
+        socket.emit("error", { message: "Not authenticated" });
+        return;
+      }
+      const conversation = await Conversation.findById(conversationId);
+      if (!conversation) {
+        socket.emit("error", {
+          message: "Conversation not found",
+          });
+      }
+      const currentParticipant = conversation.participants.find(
+        (p) => p.user.toString() === userId && p.role === "admin"
+      );
+  
+      if (!currentParticipant) {
+        socket.emit("error", {
+          message: "Only admins can add new members to the conversation",
+        });
+        return;
+      }
+      const memberToRemove = conversation.participants.find(
+        (p) => p.user.toString() === memberId
+        );
+      if (!memberToRemove) {
+          socket.emit("error", {
+            message: "Member not found",
+            });
+           return ;
+     }
+     conversation.participants=conversation.participants.filter((p)=>p.user.toString() !== memberId);
+     await conversation.save();
+     const updatedConversation = await Conversation.findById(conversationId)
+     .populate("participants.user", "username profilePicture fullName bio lastSeen status");
+
+    updatedConversation.participants.forEach(participant => {
+      const participantId = participant.user._id.toString();
+     if (participantId) {
+       io.to(participantId).emit("memberremovedFromConversation",{conversationId,removedUserId:memberId} );
+     }
+   });
+   io.to(memberId).emit("memberremovedFromConversation",{conversationId,removedUserId:memberId} );
+
+  
+    }
+    catch(err){
+      console.error("Error handling remove member:", err);
+      socket.emit("error", {
+        message: "Failed to remove member",
+        });
+    }
+  })
+  socket.on("makememberadmin", async ({ conversationId, memberId }) => {
+    try {
+      const userId = socketUserMap.get(socket.id);
+      if (!userId) {
+        socket.emit("error", { message: "Not authenticated" });
+        return;
+      }
+  
+      const conversation = await Conversation.findById(conversationId);
+      if (!conversation) {
+        socket.emit("error", { message: "Conversation not found" });
+        return;
+      }
+  
+      // Check if current user is admin
+      const currentParticipant = conversation.participants.find(
+        (p) => p.user.toString() === userId && p.role === "admin"
+      );
+  
+      if (!currentParticipant) {
+        socket.emit("error", {
+          message: "Only admins can make other members admins",
+        });
+        return;
+      }
+  
+      // Find the member to promote
+      const memberToPromote = conversation.participants.find(
+        (p) => p.user.toString() === memberId
+      );
+  
+      if (!memberToPromote) {
+        socket.emit("error", {
+          message: "Member not found in this conversation",
+        });
+        return;
+      }
+  
+      // Promote to admin
+      memberToPromote.role = "admin";
+      await conversation.save();
+  
+      // Re-fetch updated conversation with user details
+      const updatedConversation = await Conversation.findById(conversationId)
+        .populate("participants.user", "username profilePicture fullName bio lastSeen status");
+  
+      // Notify all participants
+      updatedConversation.participants.forEach(participant => {
+        const participantId = participant.user._id.toString();
+        if (participantId) {
+          io.to(participantId).emit("membertoadmin", {
+            conversationId,
+            promotedUserId: memberId
+          });
+        }
+      });
+  
+    } catch (err) {
+      console.error("Error handling makememberadmin:", err);
+      socket.emit("error", {
+        message: "Failed to make member admin",
+      });
+    }
+  });
+  socket.on("leavetheconversation", async ({ conversationId }) => {
+    try {
+      const userId = socketUserMap.get(socket.id);
+      if (!userId) {
+        socket.emit("error", { message: "Not authenticated" });
+        return;
+      }
+      
+      const conversation = await Conversation.findById(conversationId);
+      if (!conversation) {
+        socket.emit("error", { message: "Conversation not found" });
+        return;
+      }
+      
+      const participantIndex = conversation.participants.findIndex(
+        (p) => p.user.toString() === userId
+      );
+      
+      if (participantIndex === -1) {
+        socket.emit("error", { message: "User is not a participant in this conversation" });
+        return;
+      }
+      
+      const leavingUser = conversation.participants[participantIndex];
+      const isAdmin = leavingUser.role === "admin";
+      
+      // Remove user from participants
+      conversation.participants.splice(participantIndex, 1);
+      
+      // Handle empty conversation
+      if (conversation.participants.length === 0) {
+        await Conversation.findByIdAndDelete(conversationId);
+        await Message.deleteMany({ conversation: conversationId });
+        
+        io.to(userId).emit("conversationleaved", {
+          conversationId,
+          leaveduser: userId,
+          deleted: true
+        });
+        return;
+      }
+      
+      // Handle admin reassignment if needed
+      if (isAdmin) {
+        const otherAdmins = conversation.participants.filter(p => p.role === "admin");
+        if (otherAdmins.length === 0) {
+          conversation.participants[0].role = "admin";
+        }
+      }
+      
+      await conversation.save();
+      
+      // Populate user information for sending notifications
+      const updatedConversation = await Conversation.findById(conversationId)
+        .populate("participants.user", "username profilePicture fullName bio lastSeen status");
+      
+      // Notify all participants including the one who left
+      updatedConversation.participants.forEach(participant => {
+        const participantId = participant.user._id.toString();
+        io.to(participantId).emit("conversationleaved", {
+          conversationId,
+          leaveduser: userId,
+          deleted: false
+        });
+      });
+
+      io.to(userId).emit("conversationleaved", {
+        conversationId,
+        leaveduser: userId,
+        deleted: false
+      });
+      
+      
+    } catch (err) {
+      console.error("Error handling leave the conversation:", err);
+      socket.emit("error", {
+        message: "Failed to leave the conversation",
+      });
+    }
+  });
+  socket.on("deletetheConversation",async({conversationId})=>{
+    try{
+      const userId = socketUserMap.get(socket.id);
+      if (!userId) {
+        socket.emit("error", { message: "Not authenticated" });
+        return;
+      }
+  
+      const conversation = await Conversation.findById(conversationId);
+      if (!conversation) {
+        socket.emit("error", { message: "Conversation not found" });
+        return;
+      }
+      const currentParticipant = conversation.participants.find(
+        (p) => p.user.toString() === userId && p.role === "admin"
+      );
+  
+      if (!currentParticipant) {
+        socket.emit("error", {
+          message: "Only admins can delete  the conversation",
+        });
+        return;
+      }
+  
+      const existingUserIds = conversation.participants.map(p => p.user.toString());
+      
+      await Conversation.findByIdAndDelete(conversationId);
+      await Message.deleteMany({ conversation: conversationId });
+      existingUserIds.forEach(participant => {
+        const participantId = participant.toString();
+        if (participantId) {
+          io.to(participantId).emit("deletedtheconversation", {
+            conversationId
+          });
+        }
+      });      
+
+    }
+    catch(err){
+      console.error("Error handling delete the conversation:", err);
+      socket.emit("error", {
+        message: "Failed to delete the conversation",
+        });
+    }
+  })
+  
+
+
+
+
   socket.on("disconnect", async () => {
     console.log("Client disconnected", socket.id);
 
